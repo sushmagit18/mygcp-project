@@ -106,7 +106,9 @@ resource "google_dns_record_set" "web_a_record" {
   ttl          = 300
   rrdatas      = [google_compute_global_address.web_ip.address]
 }
-# App DNS Managed Zone (optional if same as web)
+#WEB
+
+# App DNS Managed Zone
 resource "google_dns_managed_zone" "app_zone" {
   name        = "app-zone"
   dns_name    = "mygcp-appproject.com."
@@ -146,6 +148,25 @@ resource "google_compute_instance_template" "app_template" {
   EOT
 }
 
+# Firewall Rule for HTTP and Health Checks
+resource "google_compute_firewall" "allow_http_health_check" {
+  name    = "allow-http-health-check"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["80"]
+  }
+
+  source_ranges = [
+    "130.211.0.0/22", # Google Load Balancer Health Check IP range
+    "35.191.0.0/16",  # Google Load Balancer Health Check IP range
+    "0.0.0.0/0"       # Optional: allow public HTTP access
+  ]
+
+  target_tags = ["app-server"]
+}
+
 # App Instance Group Manager
 resource "google_compute_instance_group_manager" "app_mig" {
   name               = "app-mig"
@@ -162,6 +183,12 @@ resource "google_compute_instance_group_manager" "app_mig" {
     name = "http"
     port = 80
   }
+}
+
+# DATA BLOCK: Lookup the managed instance group
+data "google_compute_instance_group" "app_instance_group" {
+  name = google_compute_instance_group_manager.app_mig.name
+  zone = var.zone
 }
 
 # App Health Check
@@ -181,7 +208,7 @@ resource "google_compute_backend_service" "app_backend_service" {
   protocol = "HTTP"
 
   backend {
-    group = google_compute_instance_group_manager.app_mig.instance_group
+    group = data.google_compute_instance_group.app_instance_group.self_link
   }
 
   health_checks = [google_compute_http_health_check.app_health_check.self_link]
@@ -208,8 +235,9 @@ resource "google_compute_global_forwarding_rule" "app_forwarding_rule" {
   ip_protocol = "TCP"
 }
 
+# DNS A Record for App
 resource "google_dns_record_set" "app_a_record" {
-  name         = "app.${var.app_dns_name}."  # <-- now using variable
+  name         = "app.${var.app_dns_name}."
   managed_zone = google_dns_managed_zone.app_zone.name
   type         = "A"
   ttl          = 300

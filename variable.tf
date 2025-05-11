@@ -58,8 +58,9 @@ variable "db_instance_name" {
   default = "my-db-instance"
 }
 variable "app_dns_name" {
-  description = "The DNS name for the app managed zone"
-  default     = "mygcp-appproject.com"
+  description = "App DNS name"
+  type        = string
 }
+
 
 

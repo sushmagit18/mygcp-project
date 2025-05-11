@@ -59,5 +59,10 @@ output "app_backend_service" {
 }
 
 output "app_url" {
-  value = "http://${google_compute_global_address.app_ip.address}"
+  value = "http://${google_dns_record_set.app_a_record.name}"
 }
+
+output "app_ip" {
+  value = google_compute_global_address.app_ip.address
+}
+
