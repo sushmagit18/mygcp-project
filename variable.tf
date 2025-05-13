@@ -61,6 +61,8 @@ variable "app_dns_name" {
   description = "App DNS name"
   type        = string
 }
-
+data "google_compute_network" "default" {
+  name = "default"
+}
 
 

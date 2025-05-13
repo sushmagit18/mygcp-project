@@ -2,7 +2,7 @@
 resource "google_dns_managed_zone" "web_zone" {
   name        = "web-zone"
   dns_name    = "mygcp-exampleproject.com."
-  description = "Managed zone for my web project."
+  description = "Managed zone for my web."
 }
 
 # Global IP Address for Load Balancer
@@ -13,9 +13,9 @@ resource "google_compute_global_address" "web_ip" {
 # Instance Template for backend instances
 resource "google_compute_instance_template" "web_template" {
   name         = "web-template"
-  machine_type = "f1-micro"
+  machine_type = "e2-micro"
 
-  tags = ["apache-server"]
+  tags = ["web-server"]
 
   disk {
     source_image = "debian-cloud/debian-11"
@@ -24,22 +24,36 @@ resource "google_compute_instance_template" "web_template" {
   }
 
   network_interface {
-    network = "default"
+    network = data.google_compute_network.default.self_link
     access_config {}
   }
 
   metadata_startup_script = <<-EOT
     #!/bin/bash
-    sudo apt-get update
-    sudo apt-get install -y apache2
-    echo "Hello from Web Terraform" > /var/www/html/index.html
-    sudo systemctl start apache2
+    apt update
+    apt install -y apache2
+    echo "Welcome to Web Terraform" > /var/www/html/index.html
+    systemctl start apache2
+    systemctl enable apache2
   EOT
 }
+resource "google_compute_firewall" "allow_http_web" {
+  name    = "allow-http-web"
+  network = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["80"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["web-server"]
+}
+
 
 # Managed Instance Group
-resource "google_compute_instance_group_manager" "web_igm" {
-  name               = "web-igm"
+resource "google_compute_instance_group_manager" "web_mig" {
+  name               = "web-mig"
   base_instance_name = "web"
   zone               = var.zone
 
@@ -59,12 +73,14 @@ resource "google_compute_instance_group_manager" "web_igm" {
 resource "google_compute_backend_service" "web_backend_service" {
   name     = "web-backend-service"
   protocol = "HTTP"
+  port_name = "http"
+  timeout_sec = 10
 
   backend {
-    group = google_compute_instance_group_manager.web_igm.instance_group
+    group = google_compute_instance_group_manager.web_mig.instance_group
   }
 
-  health_checks = [google_compute_http_health_check.web_health_check.self_link]
+  health_checks = [google_compute_http_health_check.web_health_check.id]
 }
 
 # Cloud Load Balancer - HTTP Health Check
@@ -81,43 +97,44 @@ resource "google_compute_http_health_check" "web_health_check" {
 # URL Map for HTTP Load Balancer
 resource "google_compute_url_map" "web_url_map" {
   name            = "web-url-map"
-  default_service = google_compute_backend_service.web_backend_service.self_link
+  default_service = google_compute_backend_service.web_backend_service.id
 }
 
 # Target HTTP Proxy
 resource "google_compute_target_http_proxy" "web_http_proxy" {
   name    = "web-http-proxy"
-  url_map = google_compute_url_map.web_url_map.self_link
+  url_map = google_compute_url_map.web_url_map.id
 }
 
 # Global Forwarding Rule
 resource "google_compute_global_forwarding_rule" "web_forwarding_rule" {
   name        = "web-forwarding-rule"
-  target      = google_compute_target_http_proxy.web_http_proxy.self_link
+  target      = google_compute_target_http_proxy.web_http_proxy.id
   port_range  = "80"
   ip_address  = google_compute_global_address.web_ip.address
   ip_protocol = "TCP"
 }
-# Create a Cloud DNS A Record
+
+
+# A Record for web
 resource "google_dns_record_set" "web_a_record" {
-  name         = "web.mygcp-exampleproject.com."  # Optional: use subdomain
-  managed_zone = google_dns_managed_zone.web_zone.name
+  name         = "web.mygcp-exampleproject.com."  # Fully qualified domain name (FQDN)
   type         = "A"
   ttl          = 300
+  managed_zone = google_dns_managed_zone.web_zone.name
   rrdatas      = [google_compute_global_address.web_ip.address]
-}
-#WEB
-
-# App DNS Managed Zone
-resource "google_dns_managed_zone" "app_zone" {
-  name        = "app-zone"
-  dns_name    = "mygcp-appproject.com."
-  description = "Managed zone for app project."
 }
 
 # Global IP for App Load Balancer
 resource "google_compute_global_address" "app_ip" {
   name = "app-ip"
+}
+###############################################
+# App DNS Managed Zone
+resource "google_dns_managed_zone" "app_zone" {
+  name        = "app-zone"
+  dns_name    = "mygcp-appproject.com."  # mygcp-appproject.com.
+  description = "Managed zone for app."
 }
 
 # App Instance Template
@@ -134,7 +151,7 @@ resource "google_compute_instance_template" "app_template" {
   }
 
   network_interface {
-    network = "default"
+    network = data.google_compute_network.default.self_link
     access_config {}
   }
 
@@ -148,24 +165,20 @@ resource "google_compute_instance_template" "app_template" {
   EOT
 }
 
-# Firewall Rule for HTTP and Health Checks
-resource "google_compute_firewall" "allow_http_health_check" {
-  name    = "allow-http-health-check"
-  network = "default"
+## Firewall Rules
+resource "google_compute_firewall" "allow_http" {
+  name    = "allow-http"
+  network = data.google_compute_network.default.name
 
   allow {
     protocol = "tcp"
     ports    = ["80"]
   }
 
-  source_ranges = [
-    "130.211.0.0/22", # Google Load Balancer Health Check IP range
-    "35.191.0.0/16",  # Google Load Balancer Health Check IP range
-    "0.0.0.0/0"       # Optional: allow public HTTP access
-  ]
-
-  target_tags = ["app-server"]
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["web-server", "app-server"]
 }
+
 
 # App Instance Group Manager
 resource "google_compute_instance_group_manager" "app_mig" {
@@ -206,41 +219,44 @@ resource "google_compute_http_health_check" "app_health_check" {
 resource "google_compute_backend_service" "app_backend_service" {
   name     = "app-backend-service"
   protocol = "HTTP"
+  timeout_sec = 10
 
   backend {
-    group = data.google_compute_instance_group.app_instance_group.self_link
+    group = google_compute_instance_group_manager.app_mig.instance_group
   }
 
-  health_checks = [google_compute_http_health_check.app_health_check.self_link]
+  health_checks = [google_compute_http_health_check.app_health_check.id]
 }
 
 # App URL Map
 resource "google_compute_url_map" "app_url_map" {
   name            = "app-url-map"
-  default_service = google_compute_backend_service.app_backend_service.self_link
+  default_service = google_compute_backend_service.app_backend_service.id
 }
 
 # App HTTP Proxy
 resource "google_compute_target_http_proxy" "app_http_proxy" {
   name    = "app-http-proxy"
-  url_map = google_compute_url_map.app_url_map.self_link
+  url_map = google_compute_url_map.app_url_map.id
 }
 
 # App Forwarding Rule
 resource "google_compute_global_forwarding_rule" "app_forwarding_rule" {
   name        = "app-forwarding-rule"
-  target      = google_compute_target_http_proxy.app_http_proxy.self_link
+  target      = google_compute_target_http_proxy.app_http_proxy.id
   port_range  = "80"
   ip_address  = google_compute_global_address.app_ip.address
   ip_protocol = "TCP"
 }
 
-# DNS A Record for App
+
+
+## App DNS Record
 resource "google_dns_record_set" "app_a_record" {
-  name         = "app.${var.app_dns_name}."
-  managed_zone = google_dns_managed_zone.app_zone.name
+  name         = "app.mygcp-appproject.com."
   type         = "A"
   ttl          = 300
+  managed_zone = google_dns_managed_zone.app_zone.name
   rrdatas      = [google_compute_global_address.app_ip.address]
 }
 
@@ -255,14 +271,30 @@ resource "google_sql_database_instance" "db" {
 
   settings {
     tier = var.db_tier
+
+    ip_configuration {
+      ipv4_enabled = true
+      authorized_networks {
+        name  = "allow-all"
+        value = "0.0.0.0/0"
+      }
+    }
   }
 }
 
+
+# Create the database
+resource "google_sql_database" "database" {
+  name     = var.db_name
+  instance = google_sql_database_instance.db.name
+}
+
+# Create the DB user
 resource "google_sql_user" "db_user" {
   instance = google_sql_database_instance.db.name
   name     = var.db_user
   password = var.db_password
-  host     = "%"
+  host     = "%"  # Allows connection from any host
 }
 
 
